@@ -1,0 +1,12 @@
+# blackbox.yml – jak testovat cíle "zvenku" (black-box = nevidím dovnitř, jen jestli odpovídá)
+modules:
+  http_2xx_selfsigned:
+    prober: http
+    timeout: 5s
+    http:
+      preferred_ip_protocol: ip4
+      follow_redirects: true
+      tls_config:
+        # Web má self-signed certifikát => neověřovat autoritu.
+        # Expiraci certifikátu blackbox přesto měří (alert CertifikatBrzyExpiruje).
+        insecure_skip_verify: true

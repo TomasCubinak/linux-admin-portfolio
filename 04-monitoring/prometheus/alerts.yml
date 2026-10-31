@@ -1,0 +1,69 @@
+# alerts.yml – kdy je něco špatně
+# expr  = dotaz v jazyce PromQL; alert platí, když vrátí nějaký výsledek
+# for   = jak dlouho musí podmínka trvat (žádné poplachy kvůli krátké špičce)
+# Stav alertu: inactive -> pending (čeká se "for") -> firing
+
+groups:
+  - name: servery
+    rules:
+
+      - alert: ServerNedostupny
+        expr: up{job="node"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.host }} ({{ $labels.instance }}) neodpovídá už 2 minuty"
+
+      - alert: DiskSkoroPlny
+        expr: |
+          node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|vfat"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|vfat"} < 0.15
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.host }}: na {{ $labels.mountpoint }} zbývá méně než 15 % místa"
+
+      - alert: MaloPameti
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.host }}: volná RAM pod 10 %"
+
+      - alert: VysokeVytizeniCPU
+        # rate() = průměrná rychlost růstu čítače za 5 min; idle čas => 100 - idle = vytížení
+        expr: 100 - (avg by (host) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.host }}: CPU přes 90 % už 10 minut"
+
+  - name: web
+    rules:
+
+      - alert: WebNedostupny
+        expr: probe_success{job="web"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "Web {{ $labels.instance }} neodpovídá"
+
+      - alert: CertifikatBrzyExpiruje
+        expr: (probe_ssl_earliest_cert_expiry{job="web"} - time()) / 86400 < 14
+        labels: { severity: warning }
+        annotations:
+          summary: "Certifikát {{ $labels.instance }} vyprší za méně než 14 dní"
+
+  - name: zalohy
+    rules:
+
+      - alert: ZalohaNeprobehla
+        # Metriku zapisuje backup.sh po úspěšné záloze. Denní záloha + rezerva => 26 h.
+        # absent(): alert i když metrika vůbec neexistuje (záloha nikdy neproběhla).
+        expr: |
+          (time() - wp_backup_last_success_timestamp_seconds) > 26 * 3600
+          or absent(wp_backup_last_success_timestamp_seconds)
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "Poslední úspěšná záloha WordPressu je starší než 26 hodin"

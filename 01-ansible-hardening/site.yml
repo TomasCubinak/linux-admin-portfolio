@@ -29,6 +29,7 @@
           - python3-systemd      # aby fail2ban uměl číst logy z journald
           - unattended-upgrades  # automatické bezpečnostní aktualizace
           - apt-listchanges
+          - prometheus-node-exporter   # exportér metrik serveru pro Prometheus (krok 4)
         state: present           # "musí být nainstalováno" (ne "nainstaluj znovu")
 
     # ------------------------------------------------------------------
@@ -109,6 +110,17 @@
         comment: "Tailscale WireGuard"
       when: allow_tailscale
 
+    # Prometheus běží v Docker kontejneru a node_exporter na hostiteli (port 9100).
+    # Provoz z kontejneru na IP hostitele jde řetězcem INPUT => UFW ho blokuje,
+    # proto povolím 9100 jen z Docker sítí (172.16.0.0/12), ne z LAN.
+    - name: UFW – povolit node_exporter z Docker sítí
+      community.general.ufw:
+        rule: allow
+        port: "9100"
+        proto: tcp
+        src: "{{ docker_subnets }}"
+        comment: "node_exporter pro Prometheus v Dockeru"
+
     - name: UFW – příchozí provoz defaultně zakázat
       community.general.ufw:
         direction: incoming
@@ -152,6 +164,18 @@
         name: fail2ban
         state: started
         enabled: true
+
+    # ------------------------------------------------------------------
+    # Složka pro "textfile collector" node_exporteru: skripty (např. záloha)
+    # sem zapisují vlastní metriky ve formátu Prometheus (*.prom).
+    # Skupina admina + 775 => zálohovací skript (běží jako admin) sem smí psát.
+    # ------------------------------------------------------------------
+    - name: Node exporter – zapisovatelná složka pro vlastní metriky
+      ansible.builtin.file:
+        path: /var/lib/prometheus/node-exporter
+        state: directory
+        group: "{{ admin_user }}"
+        mode: "0775"
 
     # ------------------------------------------------------------------
     # 6) AUTOMATICKÉ BEZPEČNOSTNÍ AKTUALIZACE

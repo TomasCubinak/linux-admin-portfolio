@@ -1,0 +1,8 @@
+# Grafana si při startu sama přidá Prometheus jako zdroj dat – žádné klikání.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy                 # dotazy posílá server Grafany, ne prohlížeč
+    url: http://prometheus:9090   # jméno služby z docker-compose
+    isDefault: true

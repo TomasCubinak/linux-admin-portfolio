@@ -1,0 +1,54 @@
+# docker-compose.yml – monitoring NASu, notebooku, webu a záloh
+#
+#  node_exporter (NAS, notebook) ──┐
+#  blackbox (kontrola webu) ───────┼──▶ Prometheus (sbírá a ukládá metriky, vyhodnocuje alerty)
+#  wp_backup.prom (textfile) ──────┘           │
+#                                              ▼
+#                                       Grafana (grafy, dashboardy)
+#
+# Prometheus funguje na principu PULL: sám si každých 15 s "stáhne" metriky
+# z HTTP endpointu /metrics každého cíle.
+
+services:
+
+  prometheus:
+    image: prom/prometheus:v3.5.0          # 3.5 = LTS verze Promethea
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d  # data starší 15 dní se mažou (disk se nezaplní)
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    ports:
+      # Prometheus nemá přihlašování => jen na localhost NASu.
+      # Z notebooku přes SSH tunel:  ssh -L 9090:127.0.0.1:9090 tomas@192.168.0.78
+      - "127.0.0.1:9090:9090"
+
+  blackbox:
+    image: prom/blackbox-exporter:v0.27.0  # "zvenku" zkouší, jestli web odpovídá
+    restart: unless-stopped
+    command: --config.file=/etc/blackbox/blackbox.yml
+    volumes:
+      - ./blackbox:/etc/blackbox:ro
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    restart: unless-stopped
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"        # nikdo si nezaloží účet sám
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      # Provisioning = datasource se nastaví ze souboru, ne klikáním (infrastruktura jako kód)
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "${BIND_IP}:3001:3000"             # 3000 už na NASu používá Next.js
+
+volumes:
+  prometheus_data:
+  grafana_data:

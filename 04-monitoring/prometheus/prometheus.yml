@@ -1,0 +1,40 @@
+# prometheus.yml – co a jak často Prometheus sbírá
+
+global:
+  scrape_interval: 15s       # jak často stahovat metriky z cílů
+  evaluation_interval: 15s   # jak často vyhodnocovat pravidla alertů
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+
+  # Prometheus hlídá sám sebe
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Servery – node_exporter (CPU, RAM, disky, síť, + vlastní metriky záloh)
+  - job_name: node
+    static_configs:
+      - targets: ["192.168.0.78:9100"]
+        labels: { host: nas, severity_hint: critical }
+      - targets: ["192.168.0.42:9100"]          # ZMĚŇ: IP notebooku (ip a)
+        labels: { host: notebook, severity_hint: warning }
+
+  # Web z projektu 02 – blackbox exporter se pokusí stránku načíst přes HTTPS.
+  # relabel_configs: Prometheus se ve skutečnosti ptá blackboxu
+  #   http://blackbox:9115/probe?target=https://192.168.0.78:8443&module=http_2xx_selfsigned
+  - job_name: web
+    metrics_path: /probe
+    params:
+      module: [http_2xx_selfsigned]
+    static_configs:
+      - targets: ["https://192.168.0.78:8443"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target        # cíl => parametr ?target=
+      - source_labels: [__param_target]
+        target_label: instance              # v grafech uvidím URL webu, ne blackbox
+      - target_label: __address__
+        replacement: blackbox:9115          # skutečně se volá blackbox

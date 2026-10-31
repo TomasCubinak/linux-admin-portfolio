@@ -71,4 +71,22 @@ find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -mtime +"$KEEP_DAYS" -print -
 # Značka úspěchu – monitoring (krok 4) podle jejího stáří pozná, že zálohy přestaly běžet
 touch "$BACKUP_DIR/last_success"
 
+# Metrika pro Prometheus přes "textfile collector" node_exporteru (krok 4).
+# Zapisuju do dočasného souboru a pak ho přejmenuju (mv je atomické) –
+# node_exporter tak nikdy nepřečte napůl zapsaný soubor.
+METRICS_DIR="${METRICS_DIR:-/var/lib/prometheus/node-exporter}"
+if [[ -d "$METRICS_DIR" && -w "$METRICS_DIR" ]]; then
+  TMP="$METRICS_DIR/wp_backup.prom.$$"            # $$ = PID skriptu => unikátní název
+  {
+    echo "# HELP wp_backup_last_success_timestamp_seconds Cas posledni uspesne zalohy (unix time)."
+    echo "# TYPE wp_backup_last_success_timestamp_seconds gauge"
+    echo "wp_backup_last_success_timestamp_seconds $(date +%s)"
+    echo "# HELP wp_backup_size_bytes Velikost posledni zalohy v bajtech."
+    echo "# TYPE wp_backup_size_bytes gauge"
+    echo "wp_backup_size_bytes $(du -sb "$DEST" | cut -f1)"
+  } > "$TMP"
+  chmod 644 "$TMP"                                 # umask 077 by ho jinak node_exporteru nedovolil číst
+  mv "$TMP" "$METRICS_DIR/wp_backup.prom"
+fi
+
 log "Hotovo: $(du -sh "$DEST" | cut -f1) v $DEST"

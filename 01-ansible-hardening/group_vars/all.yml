@@ -1,4 +1,3 @@
-
 ---
 # group_vars/all.yml – proměnné platné pro všechny servery v inventáři.
 # Oddělit data (proměnné) od logiky (playbook) je dobrá praxe:
@@ -41,3 +40,6 @@ allow_tailscale: true
 f2b_maxretry: 5
 f2b_findtime: 10m
 f2b_bantime: 1h
+
+# Rozsah, ze kterého Docker přiděluje IP svým sítím (výchozí 172.17–172.31.x.x).
+docker_subnets: "172.16.0.0/12"
