@@ -1,0 +1,63 @@
+# docker-compose.yml – hosting webové aplikace (WordPress) ve 3 kontejnerech:
+#
+#   internet/LAN ──HTTPS──▶ nginx (reverse proxy) ──▶ wordpress (PHP) ──▶ db (MariaDB)
+#                           síť "frontend"            obě sítě          síť "backend" (internal)
+#
+# Ven je publikovaný JEN nginx. Databáze nemá žádný port a je v izolované
+# síti bez přístupu na internet => zvenku se k ní nikdo nedostane.
+# Proměnné ${...} se načítají ze souboru .env (ten NENÍ v gitu – jsou v něm hesla).
+
+services:
+
+  db:
+    image: mariadb:11.4                 # LTS verze – pevná verze, ne "latest" (předvídatelné aktualizace)
+    restart: unless-stopped             # po pádu nebo rebootu se sám spustí (pokud jsem ho ručně nezastavil)
+    environment:                        # oficiální image si podle nich při 1. startu vytvoří DB a uživatele
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${DB_USER}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql          # data DB přežijí smazání kontejneru
+    networks: [backend]
+    healthcheck:                        # Docker pravidelně ověřuje, že DB opravdu odpovídá
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  wordpress:
+    image: wordpress:6-apache
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy      # start až když je DB "healthy", ne jen spuštěná
+    environment:
+      WORDPRESS_DB_HOST: db:3306        # "db" = jméno služby; Docker má vlastní DNS
+      WORDPRESS_DB_NAME: ${DB_NAME}
+      WORDPRESS_DB_USER: ${DB_USER}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - wp_data:/var/www/html           # pluginy, šablony, nahrané obrázky
+    networks: [backend, frontend]       # backend kvůli DB, frontend kvůli nginx a internetu (aktualizace)
+
+  nginx:
+    image: nginx:stable-alpine          # alpine = malý image (~20 MB), menší útočná plocha
+    restart: unless-stopped
+    depends_on: [wordpress]
+    ports:                              # "IP_hostu:port_hostu:port_kontejneru"
+      - "${BIND_IP}:8080:80"            # port 80 na NASu už má Apache => používám 8080
+      - "${BIND_IP}:8443:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro   # :ro = jen pro čtení
+      - ./certs:/etc/nginx/certs:ro
+    networks: [frontend]
+
+networks:
+  frontend:
+  backend:
+    internal: true                      # síť bez výstupu na internet
+
+volumes:                                # pojmenované volumes spravuje Docker (/var/lib/docker/volumes)
+  db_data:
+  wp_data:
