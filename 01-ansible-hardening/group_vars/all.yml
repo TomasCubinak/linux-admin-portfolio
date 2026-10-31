@@ -1,0 +1,43 @@
+
+---
+# group_vars/all.yml – proměnné platné pro všechny servery v inventáři.
+# Oddělit data (proměnné) od logiky (playbook) je dobrá praxe:
+# stejný playbook pak použiješ pro jiný server jen změnou proměnných.
+
+# Administrátorský účet na serveru (ZMĚŇ na svého uživatele).
+admin_user: tomas
+
+# Veřejný SSH klíč z notebooku, který se nahraje na server.
+# lookup('env','HOME') = tvoje domovská složka na notebooku (např. /home/tomas).
+admin_pubkey_file: "{{ lookup('env', 'HOME') }}/.ssh/id_ed25519.pub"
+
+# Tvoje domácí síť. Firewall pustí SSH a služby NASu jen odsud, ne z internetu.
+# Zjistíš ji z "ip a" – např. 192.168.1.50/24 => síť 192.168.1.0/24 (ZMĚŇ).
+lan_subnet: "192.168.0.0/24"
+
+ssh_port: 22
+
+# DŮLEŽITÉ: porty služeb, které na NASu už běží a mají fungovat dál.
+# Nejdřív na NASu spusť:  sudo ss -tulpn
+# a sem doplň všechno, co používáš. Jinak to firewall zablokuje!
+#
+# Podle výpisu "ss -tulpn" z mého NASu:
+#   - služby na 127.0.0.1 (Next.js :3000, cupsd :631, cloudflared :20241)
+#     poslouchají jen lokálně => z venku nedostupné, pravidlo NEPOTŘEBUJÍ
+#   - cloudflared (Cloudflare Tunnel) navazuje spojení VEN => žádný příchozí port
+#   - níže jsou služby, které poslouchají na všech rozhraních (0.0.0.0 / *)
+extra_allowed_ports:
+  - { port: "80",    proto: tcp, comment: "Apache HTTP" }
+  - { port: "8096",  proto: tcp, comment: "Jellyfin web" }
+  - { port: "7359",  proto: udp, comment: "Jellyfin discovery" }
+  - { port: "5353",  proto: udp, comment: "Avahi mDNS (nas.local)" }
+  # - { port: "445", proto: tcp, comment: "Samba" }   # odkomentuj, pokud Sambu máš
+
+# Tailscale (VPN): povolit veškerý provoz přicházející přes rozhraní tailscale0
+# (přístup k NASu odkudkoliv přes VPN) a UDP 41641 pro přímá WireGuard spojení.
+allow_tailscale: true
+
+# Nastavení fail2ban: po 5 špatných pokusech během 10 minut ban na 1 hodinu.
+f2b_maxretry: 5
+f2b_findtime: 10m
+f2b_bantime: 1h

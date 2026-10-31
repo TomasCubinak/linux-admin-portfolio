@@ -1,0 +1,194 @@
+---
+# site.yml – playbook pro základní zabezpečení (hardening) Debian serveru.
+#
+# Playbook = seznam úloh (tasks). Každá úloha popisuje požadovaný STAV
+# ("balíček je nainstalovaný", "soubor má tento obsah"), ne příkaz.
+# Ansible zkontroluje skutečnost a mění jen to, co neodpovídá.
+# Díky tomu je playbook IDEMPOTENTNÍ: můžeš ho pustit 100×, výsledek je stejný
+# a druhý běh hlásí changed=0.
+
+- name: Hardening Debian NAS
+  hosts: nas          # na které skupině z inventory.ini se to spustí
+  become: true        # úlohy běží přes sudo (jako root)
+
+  tasks:
+
+    # ------------------------------------------------------------------
+    # 1) BALÍČKY
+    # ------------------------------------------------------------------
+    - name: Aktualizovat seznam balíčků (apt update)
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600   # neaktualizuj, pokud je cache mladší než 1 h (kvůli idempotenci)
+
+    - name: Nainstalovat bezpečnostní balíčky
+      ansible.builtin.apt:
+        name:
+          - ufw                  # jednoduchý firewall (nadstavba nad nftables/iptables)
+          - fail2ban             # banuje IP adresy s opakovaně špatným přihlášením
+          - python3-systemd      # aby fail2ban uměl číst logy z journald
+          - unattended-upgrades  # automatické bezpečnostní aktualizace
+          - apt-listchanges
+        state: present           # "musí být nainstalováno" (ne "nainstaluj znovu")
+
+    # ------------------------------------------------------------------
+    # 2) UŽIVATEL A SSH KLÍČ
+    # ------------------------------------------------------------------
+    - name: Admin uživatel je ve skupině sudo
+      ansible.builtin.user:
+        name: "{{ admin_user }}"
+        groups: sudo
+        append: true             # PŘIDAT do skupiny, neodebírat z ostatních
+        shell: /bin/bash
+
+    - name: Veřejný SSH klíč z notebooku je v authorized_keys
+      ansible.posix.authorized_key:
+        user: "{{ admin_user }}"
+        key: "{{ lookup('file', admin_pubkey_file) }}"   # čte soubor na NOTEBOOKU
+        state: present
+
+    # ------------------------------------------------------------------
+    # 3) SSH HARDENING
+    # Debian má v /etc/ssh/sshd_config řádek "Include /etc/ssh/sshd_config.d/*.conf"
+    # úplně nahoře. sshd bere PRVNÍ nalezenou hodnotu, takže náš soubor vyhraje
+    # a hlavní konfigurák nemusíme vůbec upravovat (čistší, snadno vratné).
+    # ------------------------------------------------------------------
+    - name: SSH – bezpečná konfigurace (drop-in soubor)
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/10-hardening.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Spravováno Ansiblem – ruční změny budou přepsány.
+          PermitRootLogin no
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PubkeyAuthentication yes
+          MaxAuthTries 3
+          X11Forwarding no
+      notify: restart sshd                 # při změně spusť handler (viz dole)
+
+    # ------------------------------------------------------------------
+    # 4) FIREWALL (UFW)
+    # Pořadí je důležité: NEJDŘÍV povolit SSH, AŽ POTOM zapnout firewall,
+    # jinak by sis odřízl vlastní spojení.
+    # ------------------------------------------------------------------
+    - name: UFW – povolit SSH z domácí sítě
+      community.general.ufw:
+        rule: allow
+        port: "{{ ssh_port }}"
+        proto: tcp
+        src: "{{ lan_subnet }}"
+        comment: "SSH z LAN"
+
+    - name: UFW – povolit služby NASu z domácí sítě
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        src: "{{ lan_subnet }}"
+        comment: "{{ item.comment }}"
+      loop: "{{ extra_allowed_ports }}"    # úloha se zopakuje pro každou položku seznamu
+
+    # Tailscale je VPN: zařízení v mém tailnetu jsou ověřená přes Tailscale,
+    # takže provoz z rozhraní tailscale0 pouštím celý (SSH, Jellyfin… i na cestách).
+    - name: UFW – povolit provoz přes Tailscale VPN (rozhraní tailscale0)
+      community.general.ufw:
+        rule: allow
+        direction: in
+        interface: tailscale0
+        comment: "Tailscale VPN"
+      when: allow_tailscale        # úloha se spustí jen když je proměnná true
+
+    - name: UFW – povolit Tailscale WireGuard port (přímá P2P spojení)
+      community.general.ufw:
+        rule: allow
+        port: "41641"
+        proto: udp
+        comment: "Tailscale WireGuard"
+      when: allow_tailscale
+
+    - name: UFW – příchozí provoz defaultně zakázat
+      community.general.ufw:
+        direction: incoming
+        policy: deny
+
+    - name: UFW – odchozí provoz defaultně povolit
+      community.general.ufw:
+        direction: outgoing
+        policy: allow
+
+    - name: UFW – zapnout firewall
+      community.general.ufw:
+        state: enabled
+
+    # ------------------------------------------------------------------
+    # 5) FAIL2BAN
+    # Na Debianu 12+ jdou logy do journald a /var/log/auth.log neexistuje.
+    # Výchozí fail2ban pak nenastartuje – proto backend = systemd.
+    # Soubor jail.local má přednost před jail.conf (ten se nikdy needituje,
+    # přepsala by ho aktualizace balíčku).
+    # ------------------------------------------------------------------
+    - name: Fail2ban – jail pro SSH
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/jail.local
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Spravováno Ansiblem
+          [sshd]
+          enabled  = true
+          backend  = systemd
+          port     = {{ ssh_port }}
+          maxretry = {{ f2b_maxretry }}
+          findtime = {{ f2b_findtime }}
+          bantime  = {{ f2b_bantime }}
+      notify: restart fail2ban
+
+    - name: Fail2ban běží a startuje po bootu
+      ansible.builtin.service:
+        name: fail2ban
+        state: started
+        enabled: true
+
+    # ------------------------------------------------------------------
+    # 6) AUTOMATICKÉ BEZPEČNOSTNÍ AKTUALIZACE
+    # "1" = každý den. Debian ve výchozím stavu instaluje jen bezpečnostní
+    # opravy, ne nové verze všeho – bezpečné pro server.
+    # ------------------------------------------------------------------
+    - name: Zapnout unattended-upgrades
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+
+  # --------------------------------------------------------------------
+  # HANDLERY – spustí se jen když je nějaká úloha zavolá (notify) a ta úloha
+  # něco ZMĚNILA. Běží až na konci playbooku a jen jednou.
+  # Dva handlery poslouchají stejné jméno a běží v tomto pořadí:
+  # nejdřív kontrola configu, pak restart. Pokud "sshd -t" najde chybu,
+  # playbook skončí a SSH se NErestartuje => nezamkneš se.
+  # --------------------------------------------------------------------
+  handlers:
+    - name: Zkontrolovat konfiguraci sshd
+      ansible.builtin.command: sshd -t
+      changed_when: false
+      listen: restart sshd
+
+    - name: Restartovat SSH
+      ansible.builtin.service:
+        name: ssh          # na Debianu se služba jmenuje "ssh", ne "sshd"
+        state: restarted
+      listen: restart sshd
+
+    - name: Restartovat fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: restarted
+      listen: restart fail2ban
