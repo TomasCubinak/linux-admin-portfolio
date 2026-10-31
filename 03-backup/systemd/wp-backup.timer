@@ -1,0 +1,16 @@
+# /etc/systemd/system/wp-backup.timer
+# Timer = moderní náhrada cronu. Spouští stejnojmennou .service.
+
+[Unit]
+Description=Denni zaloha WordPressu
+
+[Timer]
+# Každý den ve 2:30 (rok-měsíc-den hodina:minuta:sekunda)
+OnCalendar=*-*-* 02:30:00
+# Náhodné zpoždění až 15 min – víc serverů nezálohuje ve stejnou vteřinu
+RandomizedDelaySec=15m
+# Když byl NAS ve 2:30 vypnutý, záloha proběhne hned po startu
+Persistent=true
+
+[Install]
+WantedBy=timers.target

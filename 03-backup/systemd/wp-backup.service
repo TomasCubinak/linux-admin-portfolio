@@ -1,0 +1,21 @@
+# /etc/systemd/system/wp-backup.service
+# Jednorázová úloha (Type=oneshot): spustí se, doběhne, skončí. Spouští ji timer.
+# Pozn.: systemd (stejně jako sshd) nepodporuje komentáře na konci řádku – jen na samostatném řádku.
+
+[Unit]
+Description=Zaloha WordPressu (DB + soubory)
+# Bez Dockeru nemá záloha smysl
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+# Neběží jako root – stačí skupina docker a práva k /srv/backups
+User=tomas
+Environment=APP_DIR=/home/tomas/app-hosting
+Environment=BACKUP_DIR=/srv/backups/wordpress
+Environment=KEEP_DAYS=7
+ExecStart=/usr/local/bin/wp-backup.sh
+# Nižší priorita CPU a disku – záloha nebrzdí web
+Nice=10
+IOSchedulingClass=idle
